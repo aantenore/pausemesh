@@ -112,8 +112,9 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
 ## Final Evidence
 
 - Repository: <https://github.com/aantenore/pausemesh>
-- Delivered commits: `5f9721c` (MVP) and `42c12d7` (cross-platform hardening).
-- Local quality gate: `pnpm check` passed; 6 test files and 34 tests passed, then TypeScript
+- Delivered commits: `6ae5ff2` (MVP), `5a7fb55` (cross-platform hardening), `ad8e3d1`
+  (delivery evidence), and `f9fbd90` (authenticated retry hardening).
+- Local quality gate: `pnpm check` passed; 6 test files and 35 tests passed, then TypeScript
   package build completed.
 - Runtime smoke: create returned 201, AG-UI projection returned `RUN_FINISHED`, resume reached
   version 2, and an exact idempotent retry returned 200.
