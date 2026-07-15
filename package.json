@@ -1,0 +1,70 @@
+{
+  "name": "pausemesh",
+  "version": "0.1.0",
+  "description": "Protocol-neutral durable pause and one-shot resume primitives for agent workflows.",
+  "author": "Antonio Antenore",
+  "type": "module",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/aantenore/pausemesh#readme",
+  "bugs": {
+    "url": "https://github.com/aantenore/pausemesh/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aantenore/pausemesh.git"
+  },
+  "keywords": [
+    "agents",
+    "agentic-ai",
+    "mcp",
+    "a2a",
+    "ag-ui",
+    "durable-execution",
+    "continuations"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.8.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "pausemesh": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "dev": "tsx watch src/cli.ts serve",
+    "demo": "tsx examples/cross-protocol-demo.ts",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "start": "node dist/cli.js serve",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.0.9",
+    "better-sqlite3": "12.11.1",
+    "hono": "4.12.30",
+    "pino": "10.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.4",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "26.1.1",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
