@@ -92,6 +92,10 @@ describe("ContinuationService", () => {
     const retry = await service.resume(input);
     expect(retry).toEqual(first);
 
+    await expect(service.resume({ ...input, resumeToken: "wrong-token" })).rejects.toBeInstanceOf(
+      TokenMismatchError,
+    );
+
     await expect(
       service.resume({ ...input, resumePayload: { answer: 43 } }),
     ).rejects.toBeInstanceOf(IdempotencyConflictError);
@@ -176,5 +180,19 @@ describe("ContinuationService", () => {
         resumeToken: created.resumeToken,
       }),
     ).rejects.toBeInstanceOf(ContinuationCancelledError);
+  });
+
+  it("resolves concurrent cancellation attempts to the single stored outcome", async () => {
+    const { service } = harness();
+    await service.create({ continuationId: "cont-cancel-race", payload: {} });
+
+    const outcomes = await Promise.all([
+      service.cancel({ continuationId: "cont-cancel-race", reason: "first" }),
+      service.cancel({ continuationId: "cont-cancel-race", reason: "second" }),
+    ]);
+
+    expect(outcomes[0]).toEqual(outcomes[1]);
+    expect(outcomes[0]).toMatchObject({ status: "cancelled", version: 2 });
+    expect(await service.history("cont-cancel-race")).toHaveLength(2);
   });
 });

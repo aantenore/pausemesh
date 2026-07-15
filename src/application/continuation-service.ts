@@ -61,6 +61,11 @@ export interface CancelContinuationInput {
   reason?: string;
 }
 
+interface ResumeContext {
+  continuation: ContinuationEnvelopeV1;
+  resumeTokenHash: ResumeTokenHash;
+}
+
 function stableJson(value: JsonValue): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
@@ -159,18 +164,19 @@ export class ContinuationService {
   }
 
   async resume(input: ResumeContinuationInput): Promise<ContinuationEnvelopeV1> {
-    const continuation = await this.#loadRequired(input.continuationId);
-    const replayed = this.#resolveCompletedResume(continuation, input);
+    const context = await this.#loadResumeContext(input.continuationId);
+    await this.#requireMatchingToken(
+      input.continuationId,
+      context.resumeTokenHash,
+      input.resumeToken,
+    );
+
+    const replayed = this.#resolveCompletedResume(context.continuation, input);
     if (replayed !== undefined) {
       return replayed;
     }
 
-    const pending = await this.#requireResumable(continuation);
-    const actualTokenHash = await this.#tokenIssuer.hash(input.resumeToken);
-    if (!tokenHashesEqual(pending.resumeTokenHash, actualTokenHash)) {
-      await this.#reject(input.continuationId, "TOKEN_MISMATCH");
-      throw new TokenMismatchError(input.continuationId);
-    }
+    const pending = await this.#requireResumable(context.continuation);
 
     const now = this.#clock.now();
     const event: ContinuationResumedV1 = {
@@ -189,8 +195,13 @@ export class ContinuationService {
       if (!(error instanceof VersionConflictError)) {
         throw error;
       }
-      const current = await this.#loadRequired(input.continuationId);
-      const resolved = this.#resolveCompletedResume(current, input);
+      const current = await this.#loadResumeContext(input.continuationId);
+      await this.#requireMatchingToken(
+        input.continuationId,
+        current.resumeTokenHash,
+        input.resumeToken,
+      );
+      const resolved = this.#resolveCompletedResume(current.continuation, input);
       if (resolved !== undefined) {
         return resolved;
       }
@@ -230,7 +241,18 @@ export class ContinuationService {
       occurredAt: now.toISOString(),
       ...(input.reason === undefined ? {} : { reason: input.reason }),
     };
-    await this.#eventStore.append(input.continuationId, continuation.version, [event]);
+    try {
+      await this.#eventStore.append(input.continuationId, continuation.version, [event]);
+    } catch (error) {
+      if (!(error instanceof VersionConflictError)) {
+        throw error;
+      }
+      const current = await this.#loadRequired(input.continuationId);
+      if (current.status === "cancelled") {
+        return current;
+      }
+      throw error;
+    }
     const cancelled = reduceContinuation(continuation, event);
     await this.#observeSafely({
       name: "continuation.transitioned",
@@ -284,6 +306,34 @@ export class ContinuationService {
       throw new ContinuationNotFoundError(continuationId);
     }
     return state;
+  }
+
+  async #loadResumeContext(continuationId: ContinuationId): Promise<ResumeContext> {
+    const events = await this.#eventStore.load(continuationId);
+    const continuation = replayContinuation(events);
+    if (continuation === undefined) {
+      throw new ContinuationNotFoundError(continuationId);
+    }
+
+    const created = events[0];
+    if (created?.type !== "continuation.created") {
+      throw new Error("Continuation history does not begin with a creation event");
+    }
+    return { continuation, resumeTokenHash: created.resumeTokenHash };
+  }
+
+  async #requireMatchingToken(
+    continuationId: ContinuationId,
+    expectedTokenHash: ResumeTokenHash,
+    token: string,
+  ): Promise<void> {
+    const actualTokenHash = await this.#tokenIssuer.hash(token);
+    if (tokenHashesEqual(expectedTokenHash, actualTokenHash)) {
+      return;
+    }
+
+    await this.#reject(continuationId, "TOKEN_MISMATCH");
+    throw new TokenMismatchError(continuationId);
   }
 
   #resolveCompletedResume(

@@ -52,6 +52,17 @@ describe("HTTP adapter", () => {
     });
     expect(resumed.status).toBe(200);
     expect(await resumed.json()).toMatchObject({ continuation: { status: "resumed", version: 2 } });
+
+    const unauthenticatedRetry = await api.request("/v1/continuations/http-1/resume", {
+      method: "POST",
+      headers: {
+        authorization: "PauseMesh wrong-token",
+        "content-type": "application/json",
+        "idempotency-key": "http-request-1",
+      },
+      body: JSON.stringify({ payload: { choice: "one" } }),
+    });
+    expect(unauthenticatedRetry.status).toBe(401);
   });
 
   it("returns typed safe errors and never echoes a bad token", async () => {
