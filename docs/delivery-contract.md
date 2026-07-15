@@ -2,7 +2,7 @@
 
 Date: 2026-07-15
 Mode: new-project
-Status: accepted for MVP implementation
+Status: delivered
 
 ## Objective
 
@@ -107,8 +107,21 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
 
 | Incident | Severity | Status | Regression prevention |
 |---|---|---|---|
-| None | - | - | - |
+| Windows checkout converted LF to CRLF, causing Biome's formatter gate to fail | P2 | Resolved | Repository `.gitattributes`, explicit Biome `lineEnding: lf`, and Windows CI |
 
 ## Final Evidence
 
-To be completed after implementation and verification.
+- Repository: <https://github.com/aantenore/pausemesh>
+- Delivered commits: `5f9721c` (MVP) and `42c12d7` (cross-platform hardening).
+- Local quality gate: `pnpm check` passed; 6 test files and 34 tests passed, then TypeScript
+  package build completed.
+- Runtime smoke: create returned 201, AG-UI projection returned `RUN_FINISHED`, resume reached
+  version 2, and an exact idempotent retry returned 200.
+- Packaging: `pnpm pack --dry-run` included only the compiled package, README, license, and package
+  manifest. Production dependency audit reported no known vulnerabilities.
+- Remote CI: [run 29402575072](https://github.com/aantenore/pausemesh/actions/runs/29402575072)
+  passed from a clean checkout on Ubuntu, macOS, and Windows with Node.js 24.
+- Repository security: Dependabot alerts and security updates, private vulnerability reporting,
+  secret scanning, push protection, and CodeQL default setup are enabled.
+- Acceptance result: every Must requirement is implemented and verified; no known P0/P1 defect
+  remains inside the documented MVP boundary.
