@@ -120,7 +120,7 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
   version 2, and an exact idempotent retry returned 200.
 - Packaging: `pnpm pack --dry-run` included only the compiled package, README, license, and package
   manifest. Production dependency audit reported no known vulnerabilities.
-- Remote CI: [run 29402575072](https://github.com/aantenore/pausemesh/actions/runs/29402575072)
+- Remote CI: [run 29403027193](https://github.com/aantenore/pausemesh/actions/runs/29403027193)
   passed from a clean checkout on Ubuntu, macOS, and Windows with Node.js 24.
 - Repository security: Dependabot alerts and security updates, private vulnerability reporting,
   secret scanning, push protection, and CodeQL default setup are enabled.
