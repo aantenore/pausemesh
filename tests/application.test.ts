@@ -4,12 +4,17 @@ import { InMemoryEventStore } from "../src/adapters/storage/index.js";
 import { ContinuationService } from "../src/application/index.js";
 import {
   ContinuationCancelledError,
+  type ContinuationEventV1,
   ContinuationExpiredError,
+  type ContinuationId,
+  type ContinuationVersion,
   IdempotencyConflictError,
+  InvalidTransitionError,
   TokenAlreadyUsedError,
   TokenMismatchError,
+  VersionConflictError,
 } from "../src/domain/index.js";
-import type { Clock, ContinuationObservation, Observer } from "../src/ports/index.js";
+import type { Clock, ContinuationObservation, EventStore, Observer } from "../src/ports/index.js";
 
 class FakeClock implements Clock {
   constructor(private current: Date) {}
@@ -28,6 +33,28 @@ class RecordingObserver implements Observer {
 
   observe(event: ContinuationObservation): void {
     this.events.push(event);
+  }
+}
+
+class CancellationInterceptingStore implements EventStore {
+  readonly inner = new InMemoryEventStore();
+  beforeCancellation: (() => Promise<void>) | undefined;
+
+  load(continuationId: ContinuationId): Promise<readonly ContinuationEventV1[]> {
+    return this.inner.load(continuationId);
+  }
+
+  async append(
+    continuationId: ContinuationId,
+    expectedVersion: ContinuationVersion,
+    events: readonly ContinuationEventV1[],
+  ): Promise<void> {
+    if (events.some((event) => event.type === "continuation.cancelled")) {
+      const intercept = this.beforeCancellation;
+      this.beforeCancellation = undefined;
+      await intercept?.();
+    }
+    await this.inner.append(continuationId, expectedVersion, events);
   }
 }
 
@@ -170,7 +197,12 @@ describe("ContinuationService", () => {
     const { service } = harness();
     const created = await service.create({ continuationId: "cont-5", payload: {} });
     const cancelled = await service.cancel({ continuationId: "cont-5", reason: "operator" });
-    expect(await service.cancel({ continuationId: "cont-5" })).toEqual(cancelled);
+    expect(await service.cancel({ continuationId: "cont-5", reason: "operator" })).toEqual(
+      cancelled,
+    );
+    await expect(service.cancel({ continuationId: "cont-5" })).rejects.toBeInstanceOf(
+      InvalidTransitionError,
+    );
 
     await expect(
       service.resume({
@@ -182,17 +214,125 @@ describe("ContinuationService", () => {
     ).rejects.toBeInstanceOf(ContinuationCancelledError);
   });
 
-  it("resolves concurrent cancellation attempts to the single stored outcome", async () => {
+  it("allows only the matching concurrent cancellation outcome", async () => {
     const { service } = harness();
     await service.create({ continuationId: "cont-cancel-race", payload: {} });
 
-    const outcomes = await Promise.all([
-      service.cancel({ continuationId: "cont-cancel-race", reason: "first" }),
-      service.cancel({ continuationId: "cont-cancel-race", reason: "second" }),
+    const outcomes = await Promise.allSettled([
+      service.cancel({
+        continuationId: "cont-cancel-race",
+        expectedVersion: 1,
+        reason: "first",
+      }),
+      service.cancel({
+        continuationId: "cont-cancel-race",
+        expectedVersion: 1,
+        reason: "second",
+      }),
     ]);
 
-    expect(outcomes[0]).toEqual(outcomes[1]);
-    expect(outcomes[0]).toMatchObject({ status: "cancelled", version: 2 });
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    const rejection = outcomes.find((outcome) => outcome.status === "rejected");
+    expect(rejection?.reason).toBeInstanceOf(InvalidTransitionError);
     expect(await service.history("cont-cancel-race")).toHaveLength(2);
+  });
+
+  it("fences cancellation with the issued version and replays the exact decision", async () => {
+    const { service } = harness();
+    await service.create({ continuationId: "cont-cancel-fence", payload: {} });
+
+    await expect(
+      service.cancel({
+        continuationId: "cont-cancel-fence",
+        expectedVersion: 0,
+        reason: "agui:cancelled",
+      }),
+    ).rejects.toBeInstanceOf(VersionConflictError);
+
+    const input = {
+      continuationId: "cont-cancel-fence",
+      expectedVersion: 1,
+      reason: "agui:cancelled",
+    } as const;
+    const cancelled = await service.cancel(input);
+    expect(await service.cancel(input)).toEqual(cancelled);
+
+    await expect(service.cancel({ ...input, expectedVersion: 2 })).rejects.toBeInstanceOf(
+      VersionConflictError,
+    );
+  });
+
+  it("materializes expiry before executing a previously issued cancellation", async () => {
+    const { clock, service } = harness();
+    await service.create({ continuationId: "cont-cancel-expired", payload: {} });
+    clock.advance(60_000);
+
+    await expect(
+      service.cancel({
+        continuationId: "cont-cancel-expired",
+        expectedVersion: 1,
+        reason: "agui:cancelled",
+      }),
+    ).rejects.toBeInstanceOf(ContinuationExpiredError);
+    expect(await service.inspect("cont-cancel-expired")).toMatchObject({
+      status: "expired",
+      version: 2,
+    });
+    expect(await service.history("cont-cancel-expired")).toHaveLength(2);
+  });
+
+  it("lets expiry win a concurrent inspect and cancellation at the deadline", async () => {
+    const { clock, service } = harness();
+    await service.create({ continuationId: "cont-cancel-expiry-race", payload: {} });
+    clock.advance(60_000);
+
+    const [cancellation, inspection] = await Promise.allSettled([
+      service.cancel({
+        continuationId: "cont-cancel-expiry-race",
+        expectedVersion: 1,
+        reason: "agui:cancelled",
+      }),
+      service.inspect("cont-cancel-expiry-race"),
+    ]);
+
+    expect(cancellation.status).toBe("rejected");
+    if (cancellation.status === "rejected") {
+      expect(cancellation.reason).toBeInstanceOf(ContinuationExpiredError);
+    }
+    expect(inspection).toMatchObject({
+      status: "fulfilled",
+      value: { status: "expired", version: 2 },
+    });
+    expect(await service.history("cont-cancel-expiry-race")).toHaveLength(2);
+  });
+
+  it("reports expiry when it wins after cancellation captured a pre-expiry decision", async () => {
+    const clock = new FakeClock(new Date("2026-07-15T08:00:00.000Z"));
+    const eventStore = new CancellationInterceptingStore();
+    const service = new ContinuationService({
+      clock,
+      eventStore,
+      observer: new RecordingObserver(),
+      tokenIssuer: new Sha256TokenIssuer(),
+      tokenTtlSeconds: 60,
+    });
+    await service.create({ continuationId: "cont-cancel-expiry-window", payload: {} });
+    eventStore.beforeCancellation = async () => {
+      clock.advance(60_000);
+      expect(await service.inspect("cont-cancel-expiry-window")).toMatchObject({
+        status: "expired",
+        version: 2,
+      });
+    };
+
+    await expect(
+      service.cancel({
+        continuationId: "cont-cancel-expiry-window",
+        expectedVersion: 1,
+        reason: "agui:cancelled",
+      }),
+    ).rejects.toBeInstanceOf(ContinuationExpiredError);
+    expect(await service.history("cont-cancel-expiry-window")).toHaveLength(2);
   });
 });

@@ -3,7 +3,8 @@
   "compilerOptions": {
     "allowImportingTsExtensions": false,
     "declaration": true,
-    "declarationMap": true,
+    "declarationMap": false,
+    "inlineSources": true,
     "rootDir": "src",
     "sourceMap": true
   },

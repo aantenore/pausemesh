@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serve } from "@hono/node-server";
 import pino from "pino";
+import packageMetadata from "../package.json" with { type: "json" };
 import { Sha256TokenIssuer } from "./adapters/crypto/sha256-token-issuer.js";
 import { createHttpApp } from "./adapters/http/index.js";
 import { SqliteEventStore } from "./adapters/storage/index.js";
@@ -14,7 +15,8 @@ import { ContinuationService } from "./application/index.js";
 import { loadConfig } from "./config/load.js";
 import { PinoObserver } from "./observability/pino-observer.js";
 
-const HELP = `PauseMesh 0.1.0
+const VERSION = packageMetadata.version;
+const HELP = `PauseMesh ${VERSION}
 
 Usage:
   pausemesh serve     Start the local reference HTTP server
@@ -41,7 +43,7 @@ export function runCli(argv: string[] = process.argv.slice(2)): void {
     return;
   }
   if (parsed.values.version === true) {
-    process.stdout.write("0.1.0\n");
+    process.stdout.write(`${VERSION}\n`);
     return;
   }
 
@@ -93,8 +95,17 @@ export function runCli(argv: string[] = process.argv.slice(2)): void {
   process.once("SIGTERM", stop);
 }
 
-const entrypoint = process.argv[1];
-if (entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href) {
+export function isDirectExecution(moduleUrl: string, entrypoint: string | undefined): boolean {
+  if (entrypoint === undefined) return false;
+
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entrypoint);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   try {
     runCli();
   } catch (error) {

@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ZodError, z } from "zod";
 import type { ContinuationService } from "../../application/index.js";
@@ -15,13 +16,21 @@ import {
   VersionConflictError,
 } from "../../domain/index.js";
 import { toA2AInterruptedTask } from "../a2a/task.js";
-import { toAguiInterruptEvent } from "../agui/interrupt.js";
-import { toMcpElicitRequest } from "../mcp/elicitation.js";
+import { issueAguiInterrupts } from "../agui/interrupt.js";
+import { issueMcpElicitation, type McpProjectionPolicy } from "../mcp/elicitation.js";
+import { ProtocolAdapterError } from "../protocol-error.js";
+
+const OpaqueIdSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim().length > 0 && value === value.trim(), {
+    message: "IDs must be non-empty and must not contain edge whitespace",
+  });
 
 const CreateContinuationSchema = z
   .object({
-    continuationId: z.string().trim().min(1).optional(),
-    correlationId: z.string().trim().min(1).optional(),
+    continuationId: OpaqueIdSchema.optional(),
+    correlationId: OpaqueIdSchema.optional(),
     expiresAt: z.iso.datetime().optional(),
     metadata: z.record(z.string(), z.json()).optional(),
     payload: z.json(),
@@ -29,10 +38,42 @@ const CreateContinuationSchema = z
   .strict();
 
 const ResumeContinuationSchema = z.object({ payload: z.json() }).strict();
-const CancelContinuationSchema = z.object({ reason: z.string().max(500).optional() }).strict();
+const CancelContinuationSchema = z
+  .object({
+    expectedVersion: z.number().int().positive().safe().optional(),
+    reason: z.string().max(500).optional(),
+  })
+  .strict();
+const A2AProjectionSchema = z
+  .object({ contextId: OpaqueIdSchema, taskId: OpaqueIdSchema })
+  .strict();
+const AguiProjectionSchema = z.object({ runId: OpaqueIdSchema, threadId: OpaqueIdSchema }).strict();
+const McpProjectionSchema = z
+  .object({
+    clientCapabilities: z
+      .object({
+        elicitation: z
+          .object({
+            form: z.record(z.string(), z.unknown()).optional(),
+            url: z.record(z.string(), z.unknown()).optional(),
+          })
+          .passthrough()
+          .optional(),
+      })
+      .passthrough(),
+    relatedTask: z.object({ taskId: OpaqueIdSchema }).strict().optional(),
+    requestId: z.union([OpaqueIdSchema, z.number().int().safe()]),
+    urlBinding: z
+      .object({ elicitationId: OpaqueIdSchema, url: z.string().min(1) })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 export interface CreateHttpAppOptions {
   maxPayloadBytes: number;
+  /** Trusted host policy; never populated from an HTTP request body. */
+  mcpProjectionPolicy?: McpProjectionPolicy;
   service: ContinuationService;
 }
 
@@ -97,6 +138,12 @@ function idempotencyKey(c: Context): string {
 
 export function createHttpApp(options: CreateHttpAppOptions): Hono {
   const app = new Hono();
+  const boundedJsonBody = bodyLimit({
+    maxSize: options.maxPayloadBytes,
+    onError: () => {
+      throw new PayloadTooLargeError(options.maxPayloadBytes);
+    },
+  });
 
   app.onError((error, c) => {
     if (error instanceof PayloadTooLargeError) {
@@ -114,6 +161,12 @@ export function createHttpApp(options: CreateHttpAppOptions): Hono {
         400,
       );
     }
+    if (error instanceof ProtocolAdapterError) {
+      return c.json(
+        { error: { code: error.code, message: error.message } },
+        error.code === "INVALID_PROTOCOL_TRANSITION" ? 409 : 400,
+      );
+    }
     if (error instanceof PauseMeshError) {
       return c.json(
         { error: { code: error.code, message: error.message, details: error.details } },
@@ -129,7 +182,7 @@ export function createHttpApp(options: CreateHttpAppOptions): Hono {
 
   app.get("/healthz", (c) => c.json({ status: "ok" }));
 
-  app.post("/v1/continuations", async (c) => {
+  app.post("/v1/continuations", boundedJsonBody, async (c) => {
     const body = CreateContinuationSchema.parse(await readBoundedJson(c, options.maxPayloadBytes));
     const result = await options.service.create({
       payload: body.payload,
@@ -151,30 +204,48 @@ export function createHttpApp(options: CreateHttpAppOptions): Hono {
     return c.json({ events });
   });
 
-  app.get("/v1/continuations/:continuationId/projections/:protocol", async (c) => {
-    const continuation = await options.service.inspect(c.req.param("continuationId"));
-    const protocol = c.req.param("protocol");
-    switch (protocol) {
-      case "mcp":
-        return c.json({ projection: toMcpElicitRequest(continuation) });
-      case "a2a":
-        return c.json({ projection: toA2AInterruptedTask(continuation) });
-      case "ag-ui":
-        return c.json({ projection: toAguiInterruptEvent(continuation) });
-      default:
-        return c.json(
-          {
-            error: {
-              code: "UNSUPPORTED_PROTOCOL",
-              message: "Protocol must be one of: mcp, a2a, ag-ui",
+  app.post(
+    "/v1/continuations/:continuationId/projections/:protocol",
+    boundedJsonBody,
+    async (c) => {
+      const continuation = await options.service.inspect(c.req.param("continuationId"));
+      const protocol = c.req.param("protocol");
+      switch (protocol) {
+        case "mcp": {
+          const context = McpProjectionSchema.parse(
+            await readBoundedJson(c, options.maxPayloadBytes),
+          );
+          const issuance = issueMcpElicitation(continuation, context, options.mcpProjectionPolicy);
+          return c.json({ projection: issuance.request, receipt: issuance.receipt });
+        }
+        case "a2a": {
+          const binding = A2AProjectionSchema.parse(
+            await readBoundedJson(c, options.maxPayloadBytes),
+          );
+          return c.json({ projection: toA2AInterruptedTask(continuation, binding) });
+        }
+        case "ag-ui": {
+          const binding = AguiProjectionSchema.parse(
+            await readBoundedJson(c, options.maxPayloadBytes),
+          );
+          const issuance = issueAguiInterrupts([continuation], binding);
+          return c.json({ projection: issuance.event, receipt: issuance.receipt });
+        }
+        default:
+          return c.json(
+            {
+              error: {
+                code: "UNSUPPORTED_PROTOCOL",
+                message: "Protocol must be one of: mcp, a2a, ag-ui",
+              },
             },
-          },
-          404,
-        );
-    }
-  });
+            404,
+          );
+      }
+    },
+  );
 
-  app.post("/v1/continuations/:continuationId/resume", async (c) => {
+  app.post("/v1/continuations/:continuationId/resume", boundedJsonBody, async (c) => {
     const body = ResumeContinuationSchema.parse(await readBoundedJson(c, options.maxPayloadBytes));
     const continuationId = c.req.param("continuationId");
     const continuation = await options.service.resume({
@@ -186,10 +257,11 @@ export function createHttpApp(options: CreateHttpAppOptions): Hono {
     return c.json({ continuation });
   });
 
-  app.post("/v1/continuations/:continuationId/cancel", async (c) => {
+  app.post("/v1/continuations/:continuationId/cancel", boundedJsonBody, async (c) => {
     const body = CancelContinuationSchema.parse(await readBoundedJson(c, options.maxPayloadBytes));
     const continuation = await options.service.cancel({
       continuationId: c.req.param("continuationId"),
+      ...(body.expectedVersion === undefined ? {} : { expectedVersion: body.expectedVersion }),
       ...(body.reason === undefined ? {} : { reason: body.reason }),
     });
     return c.json({ continuation });

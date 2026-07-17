@@ -3,6 +3,7 @@ export * from "./adapters/agui/interrupt.js";
 export * from "./adapters/crypto/sha256-token-issuer.js";
 export * from "./adapters/http/index.js";
 export * from "./adapters/mcp/elicitation.js";
+export * from "./adapters/protocol-error.js";
 export * from "./adapters/storage/index.js";
 export * from "./adapters/time/system-clock.js";
 export * from "./application/index.js";

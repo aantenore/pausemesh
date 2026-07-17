@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { ContinuationIdMismatchError, VersionConflictError } from "../../domain/errors.js";
 import type { ContinuationEventV1 } from "../../domain/events.js";
 import type { ContinuationId, ContinuationVersion } from "../../domain/types.js";
@@ -44,7 +44,7 @@ export interface SqliteEventStoreOptions {
 
 /** Durable append-only event store backed by SQLite in WAL mode. */
 export class SqliteEventStore implements EventStore {
-  readonly #database: Database.Database;
+  readonly #database: DatabaseSync;
 
   constructor(databasePath: string, options: SqliteEventStoreOptions = {}) {
     const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
@@ -52,11 +52,14 @@ export class SqliteEventStore implements EventStore {
       throw new RangeError("busyTimeoutMs must be a non-negative safe integer");
     }
 
-    this.#database = new Database(databasePath, { timeout: busyTimeoutMs });
+    this.#database = new DatabaseSync(databasePath, {
+      allowExtension: false,
+      enableDoubleQuotedStringLiterals: false,
+      timeout: busyTimeoutMs,
+    });
 
     try {
-      this.#database.pragma("journal_mode = WAL");
-      this.#database.pragma(`busy_timeout = ${busyTimeoutMs}`);
+      this.#database.exec(`PRAGMA journal_mode = WAL; PRAGMA busy_timeout = ${busyTimeoutMs};`);
       this.#database.exec(SCHEMA);
     } catch (error) {
       this.#database.close();
@@ -66,13 +69,13 @@ export class SqliteEventStore implements EventStore {
 
   async load(continuationId: ContinuationId): Promise<readonly ContinuationEventV1[]> {
     const rows = this.#database
-      .prepare<[ContinuationId], StoredEventRow>(
+      .prepare(
         `SELECT version, event_json AS eventJson
          FROM continuation_events
          WHERE continuation_id = ?
          ORDER BY version ASC`,
       )
-      .all(continuationId);
+      .all(continuationId) as unknown as StoredEventRow[];
 
     return rows.map((row, index) => {
       const expectedVersion = index + 1;
@@ -97,14 +100,15 @@ export class SqliteEventStore implements EventStore {
     expectedVersion: ContinuationVersion,
     events: readonly ContinuationEventV1[],
   ): Promise<void> {
-    const appendTransaction = this.#database.transaction(() => {
+    this.#database.exec("BEGIN IMMEDIATE");
+    try {
       const currentVersion = this.#database
-        .prepare<[ContinuationId], CurrentVersionRow>(
+        .prepare(
           `SELECT COALESCE(MAX(version), 0) AS version
            FROM continuation_events
            WHERE continuation_id = ?`,
         )
-        .get(continuationId);
+        .get(continuationId) as CurrentVersionRow | undefined;
       const actualVersion = currentVersion?.version ?? 0;
 
       if (actualVersion !== expectedVersion) {
@@ -112,7 +116,7 @@ export class SqliteEventStore implements EventStore {
       }
 
       const serializedEvents = serializeAppendBatch(continuationId, expectedVersion, events);
-      const insert = this.#database.prepare<[ContinuationId, ContinuationVersion, string]>(
+      const insert = this.#database.prepare(
         `INSERT INTO continuation_events (continuation_id, version, event_json)
          VALUES (?, ?, ?)`,
       );
@@ -120,14 +124,17 @@ export class SqliteEventStore implements EventStore {
       for (const [index, serializedEvent] of serializedEvents.entries()) {
         insert.run(continuationId, expectedVersion + index + 1, serializedEvent);
       }
-    });
-
-    // `immediate()` issues BEGIN IMMEDIATE, taking the writer reservation before the CAS read.
-    appendTransaction.immediate();
+      this.#database.exec("COMMIT");
+    } catch (error) {
+      if (this.#database.isTransaction) {
+        this.#database.exec("ROLLBACK");
+      }
+      throw error;
+    }
   }
 
   close(): void {
-    if (this.#database.open) {
+    if (this.#database.isOpen) {
       this.#database.close();
     }
   }

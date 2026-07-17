@@ -1,8 +1,9 @@
 # Delivery Contract: PauseMesh
 
 Date: 2026-07-15
+Last updated: 2026-07-17
 Mode: new-project
-Status: delivered
+Status: delivered through `0.2.0-alpha.1`
 
 ## Objective
 
@@ -57,6 +58,11 @@ Out of scope:
 | R6 | Configuration | Must | Invalid limits, ports, or paths fail at startup | Config tests |
 | R7 | Safe diagnostics | Must | Tokens and response payloads never appear in structured logs | Log assertion test |
 | R8 | Public delivery | Must | CI, documentation, license, commit, and GitHub push succeed | Repository evidence |
+| R9 | MCP conformance | Must | Capabilities, flat schemas, trusted URL policy, related-task metadata, and the exact issuance receipt fail closed | Exact adapter fixtures |
+| R10 | A2A ownership | Must | Only an explicit server task/context binding is projected; credentials remain out-of-band | Exact adapter fixtures |
+| R11 | AG-UI resume contract | Must | A whole resume batch is bound to an immutable issued receipt/current cohort and invalid input becomes `RUN_ERROR` | Official schema, receipt, and replay fixtures |
+| R12 | Adapter migration | Must | HTTP/demo/docs use the explicit 0.2 bindings with no legacy ID fallback | Build, demo, and HTTP tests |
+| R13 | Consumable package | Must | A clean source copy builds a tarball that installs in a real pnpm consumer with working ESM exports, declarations, docs, config, and CLI | Package smoke test |
 
 ## Acceptance Threshold
 
@@ -76,6 +82,11 @@ Critical:
 - State transition, stale version, token mismatch/reuse, idempotency, cancel, and expiry tests.
 - SQLite close/reopen replay and concurrent-resume tests.
 - MCP/A2A/AG-UI projection contract tests.
+- Strict MCP primitive/enum schemas, original-request receipt binding, trusted URL policy, URL
+  consent vs completion, and invalid result fixtures.
+- A2A server-binding, JSON value, authorization boundary, and terminal-state fixtures.
+- AG-UI receipt/current-cohort equality, multi-interrupt coverage, replay, CAS cancellation, expiry,
+  mandatory schema-policy, authorization isolation, and official wire-schema tests.
 
 Recommended:
 
@@ -102,6 +113,11 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
 | 2026-07-15 | Exclude profile README, pins, descriptions, and topics | Avoid collision with another task | Kept out of scope |
 | 2026-07-15 | Include LinkedIn context, GitHub follows, and stars | Parallel discovery/network work | Non-blocking; LinkedIn awaits login |
 | 2026-07-15 | Avoid overlap with existing portfolio control planes | Narrowed product boundary | Protocol primitive only |
+| 2026-07-17 | Correct upstream protocol drift before a first package release | Breaking prerelease adapter surface | Explicit host bindings and fail-closed conformance in 0.2 alpha |
+| 2026-07-17 | Make AG-UI cohort reconstruction independently verifiable | Added host-side issuance state | Content-addressed immutable receipt plus exact current-cohort validation |
+| 2026-07-17 | Prove the npm artifact from clean source | Release gate expanded | Prepack build and import/bin/content smoke included in `pnpm check` |
+| 2026-07-17 | Bind MCP results/completion to the exact emitted request | Added host-side issuance state | Request SHA-256 receipt is mandatory on inbound helpers |
+| 2026-07-17 | Remove consumer native-build approval | Storage implementation swap | `SqliteEventStore` now uses built-in `node:sqlite` behind the unchanged port |
 
 ## Incident Register
 
@@ -112,8 +128,9 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
 ## Final Evidence
 
 - Repository: <https://github.com/aantenore/pausemesh>
-- Delivered commits: `6ae5ff2` (MVP), `5a7fb55` (cross-platform hardening), `ad8e3d1`
-  (delivery evidence), and `f9fbd90` (authenticated retry hardening).
+- Delivered rewritten-history commits: `82b8964` (MVP), `a515227` (cross-platform hardening),
+  `4cad014` (delivery evidence), `f3efe51` (authenticated retry hardening), `6b16790` (history
+  evidence), and `2583003` (final CI link).
 - Local quality gate: `pnpm check` passed; 6 test files and 35 tests passed, then TypeScript
   package build completed.
 - Runtime smoke: create returned 201, AG-UI projection returned `RUN_FINISHED`, resume reached
@@ -126,3 +143,19 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
   secret scanning, push protection, and CodeQL default setup are enabled.
 - Acceptance result: every Must requirement is implemented and verified; no known P0/P1 defect
   remains inside the documented MVP boundary.
+
+### Adapter conformance release evidence
+
+- Target release: <https://github.com/aantenore/pausemesh/releases/tag/v0.2.0-alpha.1>.
+- Architecture decision: [ADR 0002](adr/0002-protocol-adapter-conformance.md).
+- Local quality gate: `pnpm check` passed with 10 test files and 164 tests, 84.24% statement and
+  80.80% branch coverage, followed by the TypeScript build and clean-source package smoke.
+- Upstream validation: AG-UI interrupt events are accepted by the exact-pinned official
+  `RunFinishedEventSchema`; MCP and A2A fixtures follow their tagged/current normative schemas.
+- Runtime smoke: the cross-protocol demo generated explicit MCP/A2A bindings, issued an AG-UI
+  event plus receipt, validated a complete inbound batch, and completed a one-shot resume.
+- Packaging: the clean-copy smoke built `pausemesh-0.2.0-alpha.1.tgz`, installed it into a separate
+  pnpm consumer, and verified compiled exports, declarations, embedded JS sources, docs/config, ESM
+  import, and the installed CLI. The production dependency audit reported no known vulnerabilities.
+- Boundary result: the continuation core and persisted envelope did not change. Protocol drift is
+  isolated to adapters, and legacy task/run ID fallbacks are absent.

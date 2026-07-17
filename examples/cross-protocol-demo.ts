@@ -1,11 +1,14 @@
 import {
   ContinuationService,
+  fromAguiRunAgentInput,
   InMemoryEventStore,
+  issueAguiInterrupts,
+  issueMcpElicitation,
+  type JsonValue,
   NoopObserver,
   Sha256TokenIssuer,
   toA2AInterruptedTask,
-  toAguiInterruptEvent,
-  toMcpElicitRequest,
+  toAguiResumeEntry,
 } from "../src/index.js";
 
 const service = new ContinuationService({
@@ -20,7 +23,6 @@ const service = new ContinuationService({
 const created = await service.create({
   continuationId: "demo-continuation",
   correlationId: "demo-thread",
-  metadata: { a2aTaskId: "demo-a2a-task", aguiRunId: "demo-agui-run" },
   payload: {
     kind: "input",
     message: "Choose the data residency region",
@@ -32,16 +34,71 @@ const created = await service.create({
   },
 });
 
+const aguiIssuance = issueAguiInterrupts([created.continuation], {
+  threadId: "demo-thread",
+  runId: "demo-agui-run",
+});
+const mcpIssuance = issueMcpElicitation(created.continuation, {
+  requestId: "demo-mcp-request",
+  clientCapabilities: { elicitation: { form: {} } },
+});
 const projections = {
-  mcp: toMcpElicitRequest(created.continuation),
-  a2a: toA2AInterruptedTask(created.continuation),
-  agui: toAguiInterruptEvent(created.continuation),
+  mcp: {
+    request: mcpIssuance.request,
+    receiptPersisted: true,
+    receiptSchemaVersion: mcpIssuance.receipt.schemaVersion,
+  },
+  a2a: toA2AInterruptedTask(created.continuation, {
+    contextId: "demo-thread",
+    taskId: "demo-a2a-server-task",
+  }),
+  agui: {
+    event: aguiIssuance.event,
+    receiptPersisted: true,
+    receiptSchemaVersion: aguiIssuance.receipt.schemaVersion,
+  },
 };
 
+const aguiValidation = fromAguiRunAgentInput(
+  {
+    threadId: "demo-thread",
+    runId: "demo-agui-resume-run",
+    state: {},
+    messages: [],
+    tools: [],
+    context: [],
+    forwardedProps: {},
+    resume: [
+      toAguiResumeEntry(created.continuation.continuationId, {
+        status: "resolved",
+        payload: { region: "eu", source: "ag-ui" },
+      }),
+    ],
+  },
+  aguiIssuance.receipt,
+  [created.continuation],
+  {
+    now: new Date("2026-07-15T08:01:00.000Z"),
+    validatePayload: ({ payload }) => {
+      const candidate = payload as { readonly region?: JsonValue };
+      return {
+        valid:
+          typeof payload === "object" &&
+          payload !== null &&
+          !Array.isArray(payload) &&
+          (candidate.region === "eu" || candidate.region === "us"),
+      };
+    },
+  },
+);
+if (!aguiValidation.ok || aguiValidation.commands[0]?.action !== "resume") {
+  throw new Error("AG-UI demo resume did not validate");
+}
+const resumeCommand = aguiValidation.commands[0];
 const resumed = await service.resume({
-  continuationId: created.continuation.continuationId,
-  idempotencyKey: "demo-response-1",
-  resumePayload: { region: "eu", source: "ag-ui" },
+  continuationId: resumeCommand.continuationId,
+  idempotencyKey: resumeCommand.idempotencyKey,
+  resumePayload: resumeCommand.resumePayload,
   resumeToken: created.resumeToken,
 });
 

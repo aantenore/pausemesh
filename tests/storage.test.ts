@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryEventStore } from "../src/adapters/storage/in-memory-event-store.js";
 import { SqliteEventStore } from "../src/adapters/storage/sqlite-event-store.js";
@@ -138,15 +138,14 @@ describe("SqliteEventStore", () => {
     expect(await store.load(CONTINUATION_ID)).toEqual([created, resumed]);
     expect(await store.load("missing-continuation")).toEqual([]);
 
-    const inspector = new Database(databasePath);
+    const inspector = new DatabaseSync(databasePath);
     try {
-      expect(inspector.pragma("journal_mode", { simple: true })).toBe("wal");
+      expect(inspector.prepare("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
       const stored = inspector
-        .prepare<[], { eventJson: string }>(
-          "SELECT event_json AS eventJson FROM continuation_events ORDER BY version LIMIT 1",
-        )
-        .get();
-      expect(JSON.parse(stored?.eventJson ?? "null")).toEqual(created);
+        .prepare("SELECT event_json AS eventJson FROM continuation_events ORDER BY version LIMIT 1")
+        .get() as { eventJson?: unknown } | undefined;
+      expect(typeof stored?.eventJson).toBe("string");
+      expect(JSON.parse(String(stored?.eventJson ?? "null"))).toEqual(created);
       expect(() =>
         inspector.prepare("UPDATE continuation_events SET event_json = event_json").run(),
       ).toThrow(/append-only/);

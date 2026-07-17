@@ -12,6 +12,7 @@ import {
   ContinuationNotFoundError,
   type ContinuationResumedV1,
   type CorrelationId,
+  canonicalJson,
   IdempotencyConflictError,
   type IdempotencyKey,
   InvalidTransitionError,
@@ -58,24 +59,14 @@ export interface ResumeContinuationInput {
 
 export interface CancelContinuationInput {
   continuationId: ContinuationId;
+  /** Compare-and-swap fence captured when the cancellation decision was issued. */
+  expectedVersion?: number;
   reason?: string;
 }
 
 interface ResumeContext {
   continuation: ContinuationEnvelopeV1;
   resumeTokenHash: ResumeTokenHash;
-}
-
-function stableJson(value: JsonValue): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
 }
 
 function tokenHashesEqual(left: ResumeTokenHash, right: ResumeTokenHash): boolean {
@@ -220,9 +211,18 @@ export class ContinuationService {
   }
 
   async cancel(input: CancelContinuationInput): Promise<ContinuationEnvelopeV1> {
-    const continuation = await this.#loadRequired(input.continuationId);
+    const loaded = await this.#loadRequired(input.continuationId);
+    if (loaded.status === "cancelled") {
+      return this.#resolveCompletedCancellation(loaded, input);
+    }
+
+    const now = this.#clock.now();
+    const continuation = await this.#expireIfDue(loaded, now);
     if (continuation.status === "cancelled") {
-      return continuation;
+      return this.#resolveCompletedCancellation(continuation, input);
+    }
+    if (continuation.status === "expired") {
+      throw new ContinuationExpiredError(input.continuationId);
     }
     if (continuation.status !== "pending") {
       throw new InvalidTransitionError(
@@ -231,8 +231,14 @@ export class ContinuationService {
         "continuation.cancelled",
       );
     }
+    if (input.expectedVersion !== undefined && continuation.version !== input.expectedVersion) {
+      throw new VersionConflictError(
+        input.continuationId,
+        input.expectedVersion,
+        continuation.version,
+      );
+    }
 
-    const now = this.#clock.now();
     const event: ContinuationCancelledV1 = {
       schemaVersion: CONTINUATION_SCHEMA_VERSION,
       type: "continuation.cancelled",
@@ -249,7 +255,10 @@ export class ContinuationService {
       }
       const current = await this.#loadRequired(input.continuationId);
       if (current.status === "cancelled") {
-        return current;
+        return this.#resolveCompletedCancellation(current, input);
+      }
+      if (current.status === "expired") {
+        throw new ContinuationExpiredError(input.continuationId);
       }
       throw error;
     }
@@ -264,15 +273,35 @@ export class ContinuationService {
     return cancelled;
   }
 
-  async #expireIfDue(continuation: ContinuationEnvelopeV1): Promise<ContinuationEnvelopeV1> {
-    if (
-      continuation.status !== "pending" ||
-      this.#clock.now().getTime() < Date.parse(continuation.expiresAt)
-    ) {
+  #resolveCompletedCancellation(
+    continuation: Extract<ContinuationEnvelopeV1, { readonly status: "cancelled" }>,
+    input: CancelContinuationInput,
+  ): ContinuationEnvelopeV1 {
+    if (continuation.reason !== input.reason) {
+      throw new InvalidTransitionError(
+        input.continuationId,
+        continuation.status,
+        "continuation.cancelled",
+      );
+    }
+    if (input.expectedVersion !== undefined && continuation.version !== input.expectedVersion + 1) {
+      throw new VersionConflictError(
+        input.continuationId,
+        input.expectedVersion,
+        continuation.version,
+      );
+    }
+    return continuation;
+  }
+
+  async #expireIfDue(
+    continuation: ContinuationEnvelopeV1,
+    now = this.#clock.now(),
+  ): Promise<ContinuationEnvelopeV1> {
+    if (continuation.status !== "pending" || now.getTime() < Date.parse(continuation.expiresAt)) {
       return continuation;
     }
 
-    const now = this.#clock.now();
     const event: ContinuationExpiredV1 = {
       schemaVersion: CONTINUATION_SCHEMA_VERSION,
       type: "continuation.expired",
@@ -346,7 +375,7 @@ export class ContinuationService {
     if (continuation.idempotencyKey !== input.idempotencyKey) {
       throw new TokenAlreadyUsedError(input.continuationId);
     }
-    if (stableJson(continuation.resumePayload) !== stableJson(input.resumePayload)) {
+    if (canonicalJson(continuation.resumePayload) !== canonicalJson(input.resumePayload)) {
       throw new IdempotencyConflictError(input.continuationId);
     }
     return continuation;
