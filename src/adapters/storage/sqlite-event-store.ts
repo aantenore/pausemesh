@@ -3,6 +3,7 @@ import { ContinuationIdMismatchError, VersionConflictError } from "../../domain/
 import type { ContinuationEventV1 } from "../../domain/events.js";
 import type { ContinuationId, ContinuationVersion } from "../../domain/types.js";
 import type { EventStore } from "../../ports/event-store.js";
+import type { ReadinessProbe } from "../../ports/readiness.js";
 import { deserializeEvent, serializeAppendBatch } from "./event-serialization.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
@@ -43,7 +44,7 @@ export interface SqliteEventStoreOptions {
 }
 
 /** Durable append-only event store backed by SQLite in WAL mode. */
-export class SqliteEventStore implements EventStore {
+export class SqliteEventStore implements EventStore, ReadinessProbe {
   readonly #database: DatabaseSync;
 
   constructor(databasePath: string, options: SqliteEventStoreOptions = {}) {
@@ -131,6 +132,10 @@ export class SqliteEventStore implements EventStore {
       }
       throw error;
     }
+  }
+
+  async checkReadiness(): Promise<void> {
+    this.#database.prepare("SELECT 1").get();
   }
 
   close(): void {

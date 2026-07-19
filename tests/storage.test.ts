@@ -184,6 +184,14 @@ describe("SqliteEventStore", () => {
     expect(() => reopened.close()).not.toThrow();
   });
 
+  it("reports readiness only while the SQLite dependency is open", async () => {
+    const store = openStore(await temporaryDatabasePath());
+
+    await expect(store.checkReadiness()).resolves.toBeUndefined();
+    store.close();
+    await expect(store.checkReadiness()).rejects.toThrow();
+  });
+
   it("allows only one winner when two instances append at the same expected version", async () => {
     const databasePath = await temporaryDatabasePath();
     const first = openStore(databasePath);

@@ -1,9 +1,9 @@
 # Delivery Contract: PauseMesh
 
 Date: 2026-07-15
-Last updated: 2026-07-17
+Last updated: 2026-07-19
 Mode: new-project
-Status: delivered through `0.2.0-alpha.1`
+Status: delivered through `0.3.0-alpha.1`
 
 ## Objective
 
@@ -19,8 +19,10 @@ Must:
 - Issue opaque, one-shot resume tokens while persisting only their SHA-256 hashes.
 - Make retries idempotent and reject stale, wrong, expired, cancelled, or reused tokens.
 - Supply replaceable in-memory and SQLite/WAL event-store adapters.
+- Supply an optional PostgreSQL adapter with explicit migrations and multi-replica CAS semantics.
 - Map a minimal continuation contract across MCP, A2A, and AG-UI adapters.
 - Expose a small HTTP/CLI demo and machine-readable errors.
+- Keep liveness independent from a fail-closed, host-owned dependency readiness probe.
 
 Should:
 
@@ -43,6 +45,7 @@ Out of scope:
 
 - Node.js 24+ is available.
 - SQLite is a reference store; consumers may implement the event-store port elsewhere.
+- PostgreSQL consumers own their pool, credentials, TLS, timeouts, runtime role, and shutdown.
 - The MVP HTTP server is for local evaluation and must not be internet-exposed without authentication.
 - Protocol drafts can change, so adapter contracts are versioned independently from the core envelope.
 
@@ -63,6 +66,10 @@ Out of scope:
 | R11 | AG-UI resume contract | Must | A whole resume batch is bound to an immutable issued receipt/current cohort and invalid input becomes `RUN_ERROR` | Official schema, receipt, and replay fixtures |
 | R12 | Adapter migration | Must | HTTP/demo/docs use the explicit 0.2 bindings with no legacy ID fallback | Build, demo, and HTTP tests |
 | R13 | Consumable package | Must | A clean source copy builds a tarball that installs in a real pnpm consumer with working ESM exports, declarations, docs, config, and CLI | Package smoke test |
+| R14 | PostgreSQL multi-replica CAS | Must | Two independent pools share a stream, one conflicting append wins, the loser receives a typed version conflict, and exact service retry reconciles | Real PostgreSQL integration test |
+| R15 | Explicit PostgreSQL migration | Must | Version/checksum mismatch, future schema, incomplete objects, or missing runtime access fail closed; constructors perform no DDL | Fake-pool and real PostgreSQL tests |
+| R16 | Liveness/readiness split | Must | `/healthz` is unchanged and independent; `/readyz` reports configured dependency readiness without leaking underlying errors | HTTP and storage tests |
+| R17 | Optional package boundary | Must | `pausemesh/postgres` works from the packed consumer while PostgreSQL symbols do not leak through the root export | Clean package smoke test |
 
 ## Acceptance Threshold
 
@@ -72,8 +79,9 @@ the local API demo completes, and security/operational limitations are explicit.
 ## Architecture Approach
 
 A modular TypeScript library: pure domain state machine, application service, storage/clock/token
-ports, protocol adapters at the edge, SQLite/WAL reference adapter, and a thin Hono HTTP adapter.
-Dependencies point inward; protocol and storage packages never leak into the domain.
+ports, protocol adapters at the edge, SQLite/WAL reference adapter, optional PostgreSQL adapter,
+and a thin Hono HTTP adapter. Dependencies point inward; protocol and storage packages never leak
+into the domain. The PostgreSQL client is injected structurally and owned by the host.
 
 ## Test Plan
 
@@ -81,6 +89,8 @@ Critical:
 
 - State transition, stale version, token mismatch/reuse, idempotency, cancel, and expiry tests.
 - SQLite close/reopen replay and concurrent-resume tests.
+- Scripted PostgreSQL migration, transaction, rollback, corruption, limit, and readiness tests.
+- Real PostgreSQL two-pool CAS, idempotency, append-only, and restart replay test.
 - MCP/A2A/AG-UI projection contract tests.
 - Strict MCP primitive/enum schemas, original-request receipt binding, trusted URL policy, URL
   consent vs completion, and invalid result fixtures.
@@ -93,10 +103,11 @@ Recommended:
 - HTTP error-shape and payload-limit integration tests.
 - Log redaction and configuration validation tests.
 
-Not tested in the MVP:
+Not covered by this library release:
 
-- Multi-node consensus, hostile internet traffic, or full upstream conformance suites; risk is high
-  outside local evaluation, so the server is explicitly non-production until those gates exist.
+- PostgreSQL regional failover/HA, backup restore, tenant isolation, hostile internet traffic, or
+  full upstream conformance suites. The bare CLI server remains non-production until a host adds
+  identity, authorization, TLS, rate limits, and deployment controls.
 
 ## Delivery Policy
 
@@ -118,6 +129,9 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
 | 2026-07-17 | Prove the npm artifact from clean source | Release gate expanded | Prepack build and import/bin/content smoke included in `pnpm check` |
 | 2026-07-17 | Bind MCP results/completion to the exact emitted request | Added host-side issuance state | Request SHA-256 receipt is mandatory on inbound helpers |
 | 2026-07-17 | Remove consumer native-build approval | Storage implementation swap | `SqliteEventStore` now uses built-in `node:sqlite` behind the unchanged port |
+| 2026-07-19 | Support callbacks reaching another replica | Added optional PostgreSQL adapter | Stream-head CAS on one checked-out `READ COMMITTED` transaction |
+| 2026-07-19 | Keep deployment credentials and lifecycle out of the library | Pool remains externally owned | Optional subpath and structural pool contract; CLI remains SQLite-only |
+| 2026-07-19 | Separate process liveness from dependency readiness | Added `ReadinessProbe` and `/readyz` | Omission/error fails closed without changing `/healthz` |
 
 ## Incident Register
 
@@ -159,3 +173,22 @@ Selected mode: create public GitHub repository and push `main`, as explicitly re
   import, and the installed CLI. The production dependency audit reported no known vulnerabilities.
 - Boundary result: the continuation core and persisted envelope did not change. Protocol drift is
   isolated to adapters, and legacy task/run ID fallbacks are absent.
+
+### PostgreSQL multi-replica release-candidate evidence
+
+- Release: `0.3.0-alpha.1`, consolidated on the protected default branch after required CI.
+- Architecture decision: [ADR 0003](adr/0003-postgres-multireplica-store.md); operations:
+  [PostgreSQL adapter runbook](postgres-runbook.md).
+- PostgreSQL unit coverage uses a scripted pool/client boundary to verify statement ordering,
+  pre-validation, compare-and-swap conflicts, rollback/release behavior, migration checksums,
+  schema completeness, bounded replay, and corruption classification.
+- The opt-in real PostgreSQL suite compiles against `pg.Pool` and is mandatory in its Linux CI job.
+  It runs concurrent migrations and replicas, exact retry, append-only guards, and restart replay.
+- Package smoke installs the tarball into a clean consumer and verifies `pausemesh/postgres` without
+  leaking PostgreSQL symbols into the root export.
+- Local PostgreSQL 17 integration: one real test passed against an ephemeral container and the
+  container was removed after verification.
+- Local quality gate: `pnpm check` passed with 193 tests passed and one opt-in PostgreSQL test
+  skipped in the ordinary coverage run; statements 86.38%, branches 82.35%, functions 92.51%, and
+  lines 87.20%. Build and clean-consumer package smoke produced and verified
+  `pausemesh-0.3.0-alpha.1.tgz`.

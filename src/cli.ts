@@ -72,7 +72,11 @@ export function runCli(argv: string[] = process.argv.slice(2)): void {
     tokenIssuer: new Sha256TokenIssuer(),
     tokenTtlSeconds: config.tokenTtlSeconds,
   });
-  const app = createHttpApp({ maxPayloadBytes: config.maxPayloadBytes, service });
+  const app = createHttpApp({
+    maxPayloadBytes: config.maxPayloadBytes,
+    readinessProbe: eventStore,
+    service,
+  });
   const server = serve(
     { fetch: app.fetch, hostname: config.host, port: config.port },
     ({ address, port }) => logger.info({ address, port }, "pausemesh.listening"),

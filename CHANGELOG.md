@@ -3,6 +3,31 @@
 All notable changes to PauseMesh are documented here. The project follows semantic versioning;
 protocol adapter contracts remain experimental until a stable `1.0.0` release.
 
+## 0.3.0-alpha.1 - 2026-07-19
+
+### Added
+
+- Optional `pausemesh/postgres` entry point with an externally owned, structurally typed pool and
+  no PostgreSQL client dependency in the root runtime path.
+- Explicit, checksum-validated PostgreSQL schema migration with a serialized migration lock,
+  append-only database guards, and no constructor-time DDL.
+- Multi-replica compare-and-swap persistence using a stream-head fence and one checked-out client
+  per transaction.
+- Bounded, fully validated PostgreSQL replay that detects missing events, version gaps, identity
+  mismatches, malformed snapshots, and unsafe `BIGINT` values.
+- Host-owned readiness port and `/readyz`; SQLite, in-memory, and PostgreSQL stores implement the
+  same probe while `/healthz` remains an independent liveness endpoint.
+- Scripted fake-pool coverage plus an opt-in real PostgreSQL test and mandatory Linux PostgreSQL CI
+  job covering concurrent replicas, exact retry, append-only enforcement, and restart replay.
+
+### Security
+
+- PostgreSQL schema identifiers are restricted and quoted; values remain parameterized.
+- Migration metadata, physical tables, expected trigger/table/function tuples, trigger activation,
+  and runtime read access fail readiness closed without leaking database errors over HTTP.
+- The adapter never owns or logs a connection string and never closes the injected pool. Deployment
+  code must separate migration and runtime roles and own timeout, idle-error, and shutdown policy.
+
 ## 0.2.0-alpha.1 - 2026-07-17
 
 ### Breaking

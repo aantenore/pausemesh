@@ -15,6 +15,7 @@ import {
   TokenMismatchError,
   VersionConflictError,
 } from "../../domain/index.js";
+import type { ReadinessProbe } from "../../ports/readiness.js";
 import { toA2AInterruptedTask } from "../a2a/task.js";
 import { issueAguiInterrupts } from "../agui/interrupt.js";
 import { issueMcpElicitation, type McpProjectionPolicy } from "../mcp/elicitation.js";
@@ -74,6 +75,8 @@ export interface CreateHttpAppOptions {
   maxPayloadBytes: number;
   /** Trusted host policy; never populated from an HTTP request body. */
   mcpProjectionPolicy?: McpProjectionPolicy;
+  /** Host-owned dependency probe. Omission makes readiness fail closed. */
+  readinessProbe?: ReadinessProbe;
   service: ContinuationService;
 }
 
@@ -181,6 +184,34 @@ export function createHttpApp(options: CreateHttpAppOptions): Hono {
   });
 
   app.get("/healthz", (c) => c.json({ status: "ok" }));
+
+  app.get("/readyz", async (c) => {
+    if (options.readinessProbe === undefined) {
+      return c.json(
+        {
+          status: "not_ready",
+          checks: [{ component: "event-store", status: "not_configured" }],
+        },
+        503,
+      );
+    }
+
+    try {
+      await options.readinessProbe.checkReadiness();
+      return c.json({
+        status: "ready",
+        checks: [{ component: "event-store", status: "ready" }],
+      });
+    } catch {
+      return c.json(
+        {
+          status: "not_ready",
+          checks: [{ component: "event-store", status: "unavailable" }],
+        },
+        503,
+      );
+    }
+  });
 
   app.post("/v1/continuations", boundedJsonBody, async (c) => {
     const body = CreateContinuationSchema.parse(await readBoundedJson(c, options.maxPayloadBytes));

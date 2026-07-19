@@ -2,13 +2,14 @@ import { VersionConflictError } from "../../domain/errors.js";
 import type { ContinuationEventV1 } from "../../domain/events.js";
 import type { ContinuationId, ContinuationVersion } from "../../domain/types.js";
 import type { EventStore } from "../../ports/event-store.js";
+import type { ReadinessProbe } from "../../ports/readiness.js";
 import { deserializeEvent, serializeAppendBatch } from "./event-serialization.js";
 
 /**
  * Process-local event store with the same JSON snapshot and optimistic concurrency semantics as
  * the durable SQLite adapter.
  */
-export class InMemoryEventStore implements EventStore {
+export class InMemoryEventStore implements EventStore, ReadinessProbe {
   readonly #streams = new Map<ContinuationId, readonly string[]>();
 
   async load(continuationId: ContinuationId): Promise<readonly ContinuationEventV1[]> {
@@ -31,4 +32,6 @@ export class InMemoryEventStore implements EventStore {
       this.#streams.set(continuationId, [...stream, ...serializedEvents]);
     }
   }
+
+  async checkReadiness(): Promise<void> {}
 }

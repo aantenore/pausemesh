@@ -5,11 +5,16 @@ import type { McpProjectionPolicy } from "../src/adapters/mcp/elicitation.js";
 import { InMemoryEventStore } from "../src/adapters/storage/index.js";
 import { ContinuationService } from "../src/application/index.js";
 import { NoopObserver } from "../src/observability/pino-observer.js";
+import type { ReadinessProbe } from "../src/ports/readiness.js";
 
-function app(mcpProjectionPolicy?: McpProjectionPolicy) {
+function app(
+  mcpProjectionPolicy?: McpProjectionPolicy,
+  readiness: ReadinessProbe | "default" | "omitted" = "default",
+) {
+  const eventStore = new InMemoryEventStore();
   const service = new ContinuationService({
     clock: { now: () => new Date("2026-07-15T08:00:00.000Z") },
-    eventStore: new InMemoryEventStore(),
+    eventStore,
     generateId: (() => {
       let id = 0;
       return () => `id-${++id}`;
@@ -22,10 +27,59 @@ function app(mcpProjectionPolicy?: McpProjectionPolicy) {
     maxPayloadBytes: 4_096,
     service,
     ...(mcpProjectionPolicy === undefined ? {} : { mcpProjectionPolicy }),
+    ...(readiness === "omitted"
+      ? {}
+      : { readinessProbe: readiness === "default" ? eventStore : readiness }),
   });
 }
 
 describe("HTTP adapter", () => {
+  it("keeps liveness independent and reports a ready event store", async () => {
+    const api = app();
+
+    const health = await api.request("/healthz");
+    const readiness = await api.request("/readyz");
+
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ status: "ok" });
+    expect(readiness.status).toBe(200);
+    expect(await readiness.json()).toEqual({
+      status: "ready",
+      checks: [{ component: "event-store", status: "ready" }],
+    });
+  });
+
+  it("fails readiness without leaking probe errors while liveness remains healthy", async () => {
+    const api = app(undefined, {
+      checkReadiness: async () => {
+        throw new Error("postgresql://secret-user:secret-password@private-db/internal");
+      },
+    });
+
+    const readiness = await api.request("/readyz");
+    const readinessBody = JSON.stringify(await readiness.json());
+
+    expect(readiness.status).toBe(503);
+    expect(readinessBody).toBe(
+      JSON.stringify({
+        status: "not_ready",
+        checks: [{ component: "event-store", status: "unavailable" }],
+      }),
+    );
+    expect(readinessBody).not.toContain("secret");
+    expect((await api.request("/healthz")).status).toBe(200);
+  });
+
+  it("fails closed when the composition root omits a readiness probe", async () => {
+    const response = await app(undefined, "omitted").request("/readyz");
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      status: "not_ready",
+      checks: [{ component: "event-store", status: "not_configured" }],
+    });
+  });
+
   it("creates, projects, resumes, and inspects a continuation", async () => {
     const api = app();
     const createdResponse = await api.request("/v1/continuations", {

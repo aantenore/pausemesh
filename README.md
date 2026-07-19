@@ -33,6 +33,7 @@ orchestrator.
 - A continuation can resume once. Concurrent attempts produce one winner.
 - Exact retries use an independent idempotency key and return the first outcome.
 - SQLite/WAL recovery after process restart, behind a replaceable `EventStore` port.
+- Optional PostgreSQL multi-replica persistence with explicit migrations and transactional CAS.
 - Redacted observations that never include tokens or continuation payloads.
 - Versioned, intentionally narrow MCP 2025-11-25, A2A 1.0, and AG-UI adapters.
 - Explicit protocol-owned request/task/run bindings; continuation IDs are used only in adapter
@@ -51,11 +52,14 @@ flowchart LR
   S --> P["EventStore port"]
   P --> M["In-memory adapter"]
   P --> Q[("SQLite / WAL")]
+  P --> PG[("PostgreSQL / replicas")]
   S --> O["Redacted observer"]
 ```
 
 Dependencies point inward. Domain code imports no Hono, SQLite, protocol SDK, or logger package.
 Protocol drift stays in adapters; storage replacement stays behind one atomic append contract.
+PostgreSQL lives behind the optional `pausemesh/postgres` entry point, so importing the root package
+does not load or require a database client.
 
 ## Quick start
 
@@ -174,6 +178,54 @@ const continuations = new ContinuationService({
 });
 ```
 
+### PostgreSQL multi-replica deployment
+
+The PostgreSQL adapter accepts an externally owned pool-like object. Migration is explicit and
+must run from a deployment process with a DDL-capable role; `PostgresEventStore` constructors never
+change the schema. The host owns TLS, credentials, timeouts, pool sizing, idle-client errors, and
+shutdown.
+
+```ts
+import { Pool } from "pg";
+import {
+  PostgresEventStore,
+  migratePostgresEventStore,
+} from "pausemesh/postgres";
+
+const migrationPool = new Pool({
+  connectionString: process.env.PAUSEMESH_MIGRATION_DATABASE_URL,
+  connectionTimeoutMillis: 5_000,
+  max: 1,
+  statement_timeout: 10_000,
+});
+await migratePostgresEventStore(migrationPool, { schema: "pausemesh" });
+await migrationPool.end();
+
+const runtimePool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 5_000,
+  idleTimeoutMillis: 30_000,
+  max: 10,
+  query_timeout: 5_000,
+  statement_timeout: 5_000,
+});
+runtimePool.on("error", () => {
+  // Report through protected host telemetry; never log the pool configuration or URL.
+});
+
+const store = new PostgresEventStore(runtimePool, {
+  schema: "pausemesh",
+  maxEventsPerStream: 32,
+});
+```
+
+Pass `store` as both the `ContinuationService` event store and
+`CreateHttpAppOptions.readinessProbe`. `GET /healthz` remains process liveness and never touches the
+database; `GET /readyz` verifies the exact migration and required PostgreSQL objects and returns a
+bounded 503 body on failure. The bundled CLI intentionally remains SQLite-only because a production
+PostgreSQL composition root must own provider-specific identity and lifecycle policy. See the
+[PostgreSQL runbook](docs/postgres-runbook.md) and [ADR 0003](docs/adr/0003-postgres-multireplica-store.md).
+
 Protocol adapters intentionally require their negotiated context:
 
 ```ts
@@ -260,8 +312,8 @@ protocol parsing; hosts can tighten the default 64-level and 50,000-node limits.
 ```text
 src/domain/                 versioned events, envelope, reducer, typed errors
 src/application/            lifecycle use cases and concurrency resolution
-src/ports/                  EventStore, Clock, TokenIssuer, Observer
-src/adapters/storage/       in-memory and SQLite/WAL stores
+src/ports/                  EventStore, ReadinessProbe, Clock, TokenIssuer, Observer
+src/adapters/storage/       in-memory, SQLite/WAL, and PostgreSQL stores
 src/adapters/{mcp,a2a,agui} protocol projections
 src/adapters/http/          local Hono reference API
 tests/                      domain, storage, concurrency, conformance, HTTP, config tests
@@ -277,6 +329,12 @@ protect payload data at rest, terminate TLS, and retain the same one-shot/CAS in
 `PAUSEMESH_MAX_PAYLOAD_BYTES` is enforced while streaming each JSON request, before parsing, even
 when no trustworthy content length is available.
 
+For PostgreSQL, use separate migration and runtime roles. The runtime role needs schema usage,
+read access, event inserts, and stream-head inserts/updates only; it must not receive DDL, delete, or
+truncate privileges. Readiness validates migration metadata and the expected active trigger
+bindings, but deployment access control remains the boundary against schema tampering. Connection
+URLs and provider credentials are owned by the host and never accepted or logged by the adapter.
+
 Resume tokens are bearer credentials. PauseMesh hashes them before persistence and redacts them
 from its observer, but the caller is responsible for safe delivery and storage. A SHA-256 hash is
 appropriate here because tokens are generated with 256 bits of entropy; it is not being used to
@@ -284,11 +342,11 @@ hash human passwords or API keys.
 
 ## Status
 
-`0.2.0-alpha.1` is an experimental protocol-conformance prerelease. The canonical state machine
-and storage contract remain unchanged; the adapter surface now requires explicit upstream
-bindings and negotiated capabilities. Protocol adapters will continue to evolve as upstream
-specifications do. See [ADR 0002](docs/adr/0002-protocol-adapter-conformance.md) for the boundary
-decision and [the delivery contract](docs/delivery-contract.md) for acceptance evidence and
-explicit non-goals.
+`0.3.0-alpha.1` is an experimental multi-replica persistence prerelease. The canonical state
+machine, protocol mappings, token handling, and `EventStore` contract remain unchanged. PostgreSQL
+adds a production-oriented storage option, not identity, tenancy, database HA, or orchestration.
+See [ADR 0002](docs/adr/0002-protocol-adapter-conformance.md),
+[ADR 0003](docs/adr/0003-postgres-multireplica-store.md), and
+[the delivery contract](docs/delivery-contract.md) for boundaries and acceptance evidence.
 
 Apache-2.0 © 2026 Antonio Antenore.

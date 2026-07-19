@@ -83,6 +83,8 @@ function verifyPackedFiles(packageRoot) {
   const expectedPaths = [
     ["dist/index.js", "the ESM entry point"],
     ["dist/index.d.ts", "the public type declarations"],
+    ["dist/postgres.js", "the optional PostgreSQL entry point"],
+    ["dist/postgres.d.ts", "the optional PostgreSQL declarations"],
     ["dist/cli.js", "the CLI entry point"],
     ["docs/delivery-contract.md", "the linked delivery contract"],
     ["docs/adr", "the linked architecture decisions"],
@@ -133,6 +135,7 @@ function verifyConsumerInstall(tarballPath) {
   writeFileSync(
     smokeModule,
     'import * as pausemesh from "pausemesh";\n' +
+      'import * as postgres from "pausemesh/postgres";\n' +
       "const expected = [\n" +
       '  "ContinuationService", "SqliteEventStore", "issueMcpElicitation",\n' +
       '  "parseMcpElicitResult", "toMcpElicitRequest",\n' +
@@ -145,6 +148,17 @@ function verifyConsumerInstall(tarballPath) {
       '  if (typeof pausemesh[name] !== "function") {\n' +
       '    throw new Error("Package export " + name + " is unavailable");\n' +
       "  }\n" +
+      "}\n" +
+      'for (const name of ["PostgresEventStore", "migratePostgresEventStore"]) {\n' +
+      '  if (typeof postgres[name] !== "function") {\n' +
+      '    throw new Error("PostgreSQL package export " + name + " is unavailable");\n' +
+      "  }\n" +
+      "}\n" +
+      "if (postgres.POSTGRES_EVENT_STORE_SCHEMA_VERSION !== 1) {\n" +
+      '  throw new Error("PostgreSQL schema version export is unavailable");\n' +
+      "}\n" +
+      'if ("PostgresEventStore" in pausemesh) {\n' +
+      '  throw new Error("Optional PostgreSQL adapter leaked into the root export");\n' +
       "}\n",
   );
   run(process.execPath, [smokeModule], consumerRoot);
