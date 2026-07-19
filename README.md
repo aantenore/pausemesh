@@ -1,6 +1,39 @@
 # PauseMesh
 
-Protocol-neutral, crash-safe `pause -> handoff -> resume` primitives for agent workflows.
+## What this changes in the real world
+
+An AI assistant often has to stop and wait for a person: to choose an option, approve a step, or
+finish signing in. If the browser disconnects or a server restarts while it waits, that job can be
+lost or resumed twice. **PauseMesh gives the pause a durable identity and allows exactly one
+authorized continuation, even when the callback reaches another server replica.**
+
+### A concrete example
+
+Imagine a travel assistant asking which flight to book. The user closes the laptop, the service is
+restarted overnight, and the answer arrives the next morning. PauseMesh restores the pending
+question, checks the one-time resume token, and lets one worker continue the booking. An exact
+duplicate callback with the same idempotency key receives the recorded outcome instead of booking
+the flight again.
+
+PauseMesh is for teams building long-running assistants that need reliable human input or external
+authorization across MCP, A2A, or AG-UI interfaces.
+
+| Feature | Practical benefit |
+| --- | --- |
+| Durable continuation log | A user can return after a disconnect or process restart without losing the pending job. |
+| Single-use resume with atomic conflict checks | Concurrent or repeated callbacks cannot continue the same action twice. |
+| MCP, A2A, and AG-UI adapters | One lifecycle can support several agent interfaces instead of duplicating recovery logic. |
+| Replaceable in-memory, SQLite, and PostgreSQL stores | The same core can run in a test, on one machine, or across service replicas. |
+| Redacted operational observations | Teams can diagnose lifecycle problems without exposing resume tokens or continuation payloads. |
+
+> **Maturity:** PauseMesh is an early reference library and local server with tested recovery and
+> storage paths. It is not a workflow engine, identity provider, tool executor, or turnkey cloud
+> service; the host application still owns authentication, authorization, and business actions.
+
+## Technical scope
+
+PauseMesh provides protocol-neutral, crash-safe `pause -> handoff -> resume` primitives for agent
+workflows.
 
 PauseMesh is a small TypeScript library and local reference server for a lifecycle gap between
 [MCP elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation),
