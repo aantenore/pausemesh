@@ -12,11 +12,11 @@ importers:
         specifier: 0.0.57
         version: 0.0.57
       '@hono/node-server':
-        specifier: 2.0.9
-        version: 2.0.9(hono@4.12.30)
+        specifier: 2.0.10
+        version: 2.0.10(hono@4.12.31)
       hono:
-        specifier: 4.12.30
-        version: 4.12.30
+        specifier: 4.12.31
+        version: 4.12.31
       pino:
         specifier: 10.3.1
         version: 10.3.1
@@ -297,8 +297,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@hono/node-server@2.0.9':
-    resolution: {integrity: sha512-cNMw3ziCdDcx0+ldta60zvUL5XO0OLt521n2hjPp0PB0ugczDCEczXsf33qQbkKIXWGFQ03f0LC85u6YK8pCLA==}
+  '@hono/node-server@2.0.10':
+    resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4
@@ -657,8 +657,8 @@ packages:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
     engines: {node: '>=8'}
 
-  hono@4.12.30:
-    resolution: {integrity: sha512-emn+JoJjrN9YTpRDS5it/UI2SO9BAE37T6I3d963RxcZ81G9A4pr2SZTEiiaiKbzx+NKRg5BZ89fCL7gCJCUog==}
+  hono@4.12.31:
+    resolution: {integrity: sha512-zJIHFrl6bq3RDd2YusFNCDlM8qUprxKswyi/OPzPyzKDdyBXDqWx8bZlZ7R+saTdSTatUmb3O7K4SspGPaEOQg==}
     engines: {node: '>=16.9.0'}
 
   html-escaper@2.0.2:
@@ -1185,9 +1185,9 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@hono/node-server@2.0.9(hono@4.12.30)':
+  '@hono/node-server@2.0.10(hono@4.12.31)':
     dependencies:
-      hono: 4.12.30
+      hono: 4.12.31
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -1463,7 +1463,7 @@ snapshots:
 
   has-flag@4.0.0: {}
 
-  hono@4.12.30: {}
+  hono@4.12.31: {}
 
   html-escaper@2.0.2: {}
 
