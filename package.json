@@ -65,11 +65,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ag-ui/core": "0.0.57",
-    "@hono/node-server": "2.0.10",
-    "hono": "4.12.31",
+    "@ag-ui/core": "0.0.59",
+    "@hono/node-server": "2.1.1",
+    "hono": "4.13.5",
     "pino": "10.3.1",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
